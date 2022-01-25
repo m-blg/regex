@@ -25,6 +25,23 @@ void print(Graph::Transition t) {
     print("(", t.node_index,",", t.s, ")");
 }
 
+dstrb to_graphvis(Graph g) {
+    dstrb sb; init(&sb, 10 * len(g.transitions));
+    for (u32 i = 0; i < len(g.transitions); i++) {
+        for (u32 j = 0; j < len(g[i]); j++) {
+            if (cap(sb) - len(sb) < 200)
+                resize(&sb._dbuff, cap(sb)*2);
+            sb.len += snprintf(endp(sb), 200, "%d -> %d [label=\"%.*s\"];\n", 
+                i, g[i][j].node_index, g[i][j].s.cap, g[i][j].s.buffer);
+            
+            // sprint(&sb, i, " -> ", g[i][j].node_index, "[label=\"", g[i][j].s, "\"];\n");
+            // sprint_fmt(&sb, "%d -> %d [label=\"%.*s\"];\n", 
+            //     i, g[i][j].node_index, g[i][j].s.cap, g[i][j].s.buffer);
+        }
+    }
+    return sb;
+}
+
 //init :: Graph -> darr<darr<Transition>> -> void
 
 void init(Graph *self) {
@@ -98,7 +115,9 @@ Graph parse_regex(str re) {
         }
 
         // try process string
-        if ( !is_elem(head(re), re_reserved) && (len(re) == 1 || !is_elem(re[1], re_reserved)) ) {
+        if ( !is_elem(head(re), re_reserved) && 
+             (len(re) == 1 || !is_elem(re[1], re_reserved) || re[1] == '|') ) 
+        {
             str s = {re.buffer, 0};
             while (true) {
                 i32 c_ind = len(s);
@@ -119,16 +138,16 @@ Graph parse_regex(str re) {
                         s.cap++;
                     }
 
-                    // if (re[c_ind+1] == '|') {
-                    //     add_transition(&g, cur.i, {(i32)cur.fi, s, 1, 1});
-                    //     cur.i = cur.si;
-                    //     re = drop(len(s)+1, re);
-                    // } else {
-                    u32 node_i = add_node(&g);
-                    add_transition(&g, cur.i, {(i32)node_i, s, 1, 1});
-                    cur.i = node_i;
-                    re = drop(len(s), re);
-                    // }
+                    if (re[c_ind+1] == '|') {
+                        add_transition(&g, cur.i, {(i32)cur.fi, s, 1, 1});
+                        cur.i = cur.si;
+                        re = drop(len(s)+1, re);
+                    } else {
+                        u32 node_i = add_node(&g);
+                        add_transition(&g, cur.i, {(i32)node_i, s, 1, 1});
+                        cur.i = node_i;
+                        re = drop(len(s), re);
+                    }
                     break;
                 }
 
@@ -220,6 +239,7 @@ Graph parse_regex(str re) {
         } break;
         
         case '|':
+            // mabort("Bad regex");
             add_transition(&g, cur.i, {cur.fi, "", 1, 1});
             cur.i = cur.si;
             re = drop(1, re);
@@ -248,6 +268,13 @@ void test() {
 }
 
 int main() {
-    Graph g = parse_regex("abcd|a|aa");
-    print(g.transitions);
+    Graph g = parse_regex("abcd*|aaa|aa");
+    // print(g.transitions);
+    dstrb gvis = to_graphvis(g);
+    print(to_str(gvis));
+    shut(&gvis);
+
+    shut(&g);
+
+    fprintf(stdout, "test\n");
 }
