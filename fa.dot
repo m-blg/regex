@@ -1,9 +1,6 @@
-digraph G {
-
-    0 -> 2 [label="abc"];
-0 -> 1 [label="aaa"];
-0 -> 1 [label="aa"];
-2 -> 2 [label="d"];
-2 -> 1 [label=""];
-
+digraph G {	0 -> 2 [label="c"];
+	0 -> 0 [label="b"];
+	0 -> 2 [label=""];
+	0 -> 1 [label=""];
+	2 -> 0 [label=""];
 }
