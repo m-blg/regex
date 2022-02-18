@@ -1,4 +1,5 @@
 
+#include "cp_lib/array.cc"
 #include "cp_lib/buffer.cc"
 #include "cp_lib/string.cc"
 #include "cp_lib/io.cc"
@@ -16,7 +17,6 @@ struct Regex_FA {
         dstrb s;
         i32 minq;
         i32 maxq;
-        i32 q;
     };
     darr<darr<Transition>> transitions;
 
@@ -302,6 +302,93 @@ test1() {
     shut(&g);
 }
 
+
+// NOTE: we need explicit loop flags (let's use q field of Transition)
+
+str
+match(Regex_FA re, str s)
+{
+    struct S {
+        struct Loop_Counter {
+            i32 state_i;
+            i32 q;
+        };
+        i32 state_i, tran_i;
+        str s;
+        darr<Loop_Counter> loop_counters;
+    };
+    darr<S> stack; init(&stack, 1);
+
+    {
+        darr<S::Loop_Counter> lcs; init(&lcs);
+        push(&stack, {0, 0, s, lcs});
+    }
+
+    while (!is_empty(stack)) {
+        S cur = back(stack);
+        pop(&stack);
+
+        if (cur.state_i == 1) { // finish state
+            for (auto it = begin(stack); it != end(stack); it++)
+                shut(&it->loop_counters);
+            return {s.buffer, s.cap - cur.s.cap};
+        } 
+        
+        assert(is_bounded(cur.state_i, 0, (i32)len(re.transitions) - 1));
+        assert(is_bounded(cur.tran_i, 0, (i32)len(re.transitions[cur.state_i]) - 1));
+
+        Regex_FA::Transition& tran = re.transitions[cur.state_i][cur.tran_i];
+
+        if (tran.minq != -1) { // if loop (enter transition)
+            assert(cur.tran_i == 0);
+            if (is_empty(cur.loop_counters) || back(cur.loop_counters).state_i != cur.state_i) {
+                push(&cur.loop_counters, {cur.state_i, 0});
+            } else
+                back(cur.loop_counters).q++;
+
+            if (back(cur.loop_counters).q >= tran.maxq) { // end of the loop
+                pop(&cur.loop_counters);
+                cur.tran_i++;
+                push(&stack, cur);
+                continue;
+            }
+
+            if (back(cur.loop_counters).q >= tran.minq) {
+                darr<S::Loop_Counter> lcs = copy(cur.loop_counters);
+                pop(&lcs);
+                push(&stack, {cur.state_i, cur.tran_i+1, cur.s, lcs});
+            }
+        } else {
+            if (cur.tran_i < len(re.transitions[cur.state_i]) - 1) {
+                darr<S::Loop_Counter> lcs = copy(cur.loop_counters);
+                push(&stack, {cur.state_i, cur.tran_i+1, cur.s, lcs});
+            }
+        }
+
+        
+        if (to_str(tran.s) != take(len(tran.s), cur.s)) {
+            shut(&cur.loop_counters);
+            continue;
+        }
+
+        cur.s = drop(len(tran.s), cur.s);
+        cur.state_i = tran.node_index;  
+        cur.tran_i = 0;
+        push(&stack, cur);
+    }
+
+    // assert(false);
+    return {};
+}
+
+str
+match(str re, str s) {
+    Regex_FA re_fa = parse_regex(re);
+    return match(re_fa, s);
+}
+
+
+
 void
 test_regex(str re, str of_name_no_ext) {
     Regex_FA g = parse_regex(re);
@@ -330,83 +417,28 @@ test_regex(str re, str of_name_no_ext) {
     shut(&g);
 }
 
+void test_regex() {
+    auto res = pack("a(b|c)*a",  "a(b|c|a)*b", "a(b(1|2)+c|d(3|4)?e)f", "a(b(1|2)+c|d(3|4)?e)*f");
 
-// NOTE: we need explicit loop flags (let's use q field of Transition)
-
-bool
-match(Regex_FA re, str s)
-{
-    struct S {
-        i32 state_i, tran_i;
-        str s;
-    };
-    darr<S> stack; init(&stack, 1);
-
-    push(&stack, {0, 0, s});
-
-    while (!is_empty(stack)) {
-        S cur = back(stack);
-        pop(&stack);
-
-        if (cur.state_i == 1) { // finish state
-            return is_empty(cur.s);
-        } 
-        
-        assert(is_bounded(cur.state_i, 0, (i32)len(re.transitions) - 1));
-        assert(is_bounded(cur.tran_i, 0, (i32)len(re.transitions[cur.state_i]) - 1));
-        // if (!is_bounded(cur.tran_i, 0, len(re.transitions[cur.state_i]) - 1)) {
-        //     pop(&stack);
-        //     continue;
-        // }
-        Regex_FA::Transition& tran = re.transitions[cur.state_i][cur.tran_i];
-        if (tran.q >= tran.maxq) { // end of the loop
-            tran.q = 0;
-            cur.tran_i++;
-            push(&stack, cur);
-            continue;
-        }
-        if (tran.q >= tran.minq && cur.tran_i < len(re.transitions[cur.state_i]) - 1) {
-            push(&stack, {cur.state_i, cur.tran_i+1, cur.s});
-        }
-        
-        if (to_str(tran.s) != take(len(tran.s), cur.s)) {
-            if (cur.tran_i == len(re.transitions[cur.state_i]) - 1 ||
-                tran.q < tran.minq)
-            {
-                // fail: whole state, backtrack
-                
-                if (is_empty(stack))
-                    return false;
-                S& frame = back(stack);
-                re[frame.state_i][0].q = 0; // reset counter for loop (if present)
-                continue;
-            }
-                
-            if (cur.tran_i == 0) // if loop (or not)
-                re[cur.state_i][0].q = 0; 
-            cur.tran_i++;
-
-            push(&stack, cur);
-            continue;
-        }
-
-        cur.s = drop(len(tran.s), cur.s);
-        if (cur.tran_i == 0 && tran.minq != -1) // if loop
-            tran.q++;
-        cur.state_i = tran.node_index;  
-        cur.tran_i = 0;
-        push(&stack, cur);
+    char of_name[] = "test/test100";
+    for (i32 i = 0; i < len(res); i++) {
+        i32 l = snprintf(of_name, sizeof(of_name)-1, "test/test%d" , i);
+        test_regex(res[i], str{of_name, (u32)l});
     }
-
-    assert(false);
-    return false;
 }
 
 
 void
-test_match(str re, str s) {
-    Regex_FA re_fa = parse_regex(re);
-    printf("Result: %d\n", match(re_fa, s));
+test_match() {
+    darr<bool> test_results; init(&test_results);
+    push(&test_results, match("a(b|c)*a", "abcba") == str{"abcba"});
+    push(&test_results, match("a(b|c|a)*b", "abcccccccbbbbbbccbab") == str{"abcccccccbbbbbbccbab"});
+    push(&test_results, match("a(b|c|a)*b", "abcccccccbbbbbbccba") != str{});
+    push(&test_results, match("a(b(1|2)+c|d(3|4)?e)f", "ab21211cf") != str{});
+    push(&test_results, match("a(b(1|2)+c|d(3|4)?e)*f", "ab1cdeb2cd4ef") != str{});
+
+    for (i32 i = 0; i < len(test_results); i++)
+        printf("Result %d: %d\n", i, test_results[i]);
 }    
 
 int main() {
@@ -416,6 +448,9 @@ int main() {
     // test_regex("a(b|c)a", "test/test3");
     // test_match("a(b|c)a", "aba");
     // test_regex("a(b|c)*a", "test/test4");
-    test_match("a(b|c)*a", "abcba");
+    test_regex();
+    test_match();
+    // test_regex("ab(1|2)+cf", "test/test5");
     // test_match("(b|c)", "c");
+    // match("ab(1|2)+cf", "ab21211cf");
 }
